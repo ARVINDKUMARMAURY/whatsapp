@@ -46,7 +46,8 @@ Do services chahiye:
 ### 1. Evolution API deploy karo (Railway pe alag service)
 
 1. Railway me naya project banao
-2. "Deploy from Docker Image" choose karo, image daalo: `atendai/evolution-api:latest`
+2. "Deploy from Docker Image" choose karo, image daalo: `evoapicloud/evolution-api:v2.3.0`
+   (purana naam `atendai/evolution-api` band ho chuka hai — ye naya official naam hai)
 3. Environment variables set karo:
    ```
    AUTHENTICATION_API_KEY=koi_bhi_strong_random_string
