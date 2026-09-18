@@ -122,7 +122,18 @@ curl -X POST https://your-trade-bridge-bot.up.railway.app/admin/orders \
 
 Ek-ek order curl se daalna practical nahi hai — isliye do bulk options hain:
 
-### Option A: CSV file se (Excel/Google Sheets se export karke)
+## Saare orders ek saath daalna (Bulk Import)
+
+### Option A: Drag-and-drop web page (sabse aasaan, koi command nahi)
+
+Browser me kholo: `https://your-trade-bridge-bot.up.railway.app/admin/upload`
+
+- Server URL (auto-filled) aur apna `ADMIN_TOKEN` bharo
+- CSV file drag-drop karo (ya click karke choose karo)
+- "Upload Orders" click karo — kitne save hue, kitne fail hue turant dikh jayega
+- Page pe hi sample CSV template download karne ka link hai
+
+### Option B: CSV file se (curl se, agar terminal se karna ho)
 
 `sample_orders.csv` jaisi file banao (columns: `order_id,phone,product,status,note`
 — `note` optional hai). Excel/Google Sheets me table banao, "Export as CSV" karo,
@@ -136,7 +147,7 @@ curl -X POST https://your-trade-bridge-bot.up.railway.app/admin/orders/bulk-csv 
 
 Response me batayega kitne successfully add hue aur kitne fail hue (aur kyun).
 
-### Option B: JSON array se (agar data kahin script/API se aa raha ho)
+### Option C: JSON array se (agar data kahin script/API se aa raha ho)
 
 ```bash
 curl -X POST https://your-trade-bridge-bot.up.railway.app/admin/orders/bulk \

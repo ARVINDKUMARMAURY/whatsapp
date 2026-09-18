@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Trade Bridge — Order Upload</title>
+<style>
+  :root {
+    --bg: #0a0f0c;
+    --panel: #101712;
+    --border: #1f2b23;
+    --green: #22c55e;
+    --green-dim: #16a34a;
+    --text: #e5e7eb;
+    --text-dim: #9ca3af;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 32px;
+    max-width: 520px;
+    width: 100%;
+  }
+  h1 {
+    font-size: 22px;
+    margin: 0 0 4px;
+    color: var(--green);
+  }
+  .subtitle {
+    color: var(--text-dim);
+    font-size: 14px;
+    margin-bottom: 24px;
+  }
+  label {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-bottom: 8px;
+  }
+  input[type="text"], input[type="url"] {
+    width: 100%;
+    background: #0d1310;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    color: var(--text);
+    font-size: 14px;
+    margin-bottom: 20px;
+    outline: none;
+  }
+  input[type="text"]:focus, input[type="url"]:focus {
+    border-color: var(--green-dim);
+  }
+  #dropzone {
+    border: 2px dashed var(--border);
+    border-radius: 12px;
+    padding: 40px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+    color: var(--text-dim);
+    font-size: 14px;
+  }
+  #dropzone.dragover {
+    border-color: var(--green);
+    background: rgba(34, 197, 94, 0.06);
+    color: var(--text);
+  }
+  #dropzone .icon { font-size: 32px; margin-bottom: 8px; }
+  #fileInput { display: none; }
+  #fileName {
+    margin-top: 10px;
+    font-size: 13px;
+    color: var(--green);
+    word-break: break-all;
+  }
+  button {
+    width: 100%;
+    margin-top: 20px;
+    background: var(--green-dim);
+    color: #04160c;
+    border: none;
+    border-radius: 8px;
+    padding: 13px;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  button:not(:disabled):hover {
+    background: var(--green);
+  }
+  #result {
+    margin-top: 20px;
+    padding: 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    display: none;
+    white-space: pre-wrap;
+  }
+  #result.ok {
+    background: rgba(34, 197, 94, 0.1);
+    border: 1px solid var(--green-dim);
+    color: #86efac;
+    display: block;
+  }
+  #result.err {
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid #dc2626;
+    color: #fca5a5;
+    display: block;
+  }
+  a.template {
+    display: inline-block;
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--text-dim);
+    text-decoration: underline;
+  }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>📦 Trade Bridge</h1>
+    <div class="subtitle">Bulk order upload — CSV ko yahan drag karo</div>
+
+    <label for="serverUrl">Server URL</label>
+    <input type="url" id="serverUrl" placeholder="https://your-app.up.railway.app" />
+
+    <label for="adminToken">Admin Token</label>
+    <input type="text" id="adminToken" placeholder="tumhara ADMIN_TOKEN" />
+
+    <label>CSV File</label>
+    <div id="dropzone">
+      <div class="icon">⬆️</div>
+      <div>CSV file yahan drag-drop karo, ya click karke choose karo</div>
+      <div id="fileName"></div>
+    </div>
+    <input type="file" id="fileInput" accept=".csv" />
+    <a class="template" href="/sample_orders.csv" download>Sample CSV template download karo</a>
+
+    <button id="uploadBtn" disabled>Upload Orders</button>
+
+    <div id="result"></div>
+  </div>
+
+<script>
+  const dropzone = document.getElementById('dropzone');
+  const fileInput = document.getElementById('fileInput');
+  const fileNameEl = document.getElementById('fileName');
+  const uploadBtn = document.getElementById('uploadBtn');
+  const resultEl = document.getElementById('result');
+  const serverUrlEl = document.getElementById('serverUrl');
+  const adminTokenEl = document.getElementById('adminToken');
+
+  let selectedFile = null;
+
+  // Convenience: server URL aur token browser me yaad rakho (sirf isi device pe)
+  serverUrlEl.value = localStorage.getItem('tb_server_url') || window.location.origin;
+  adminTokenEl.value = localStorage.getItem('tb_admin_token') || '';
+  serverUrlEl.addEventListener('change', () => localStorage.setItem('tb_server_url', serverUrlEl.value));
+  adminTokenEl.addEventListener('change', () => localStorage.setItem('tb_admin_token', adminTokenEl.value));
+
+  function setFile(file) {
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.csv')) {
+      showResult(false, 'Sirf .csv file allowed hai.');
+      return;
+    }
+    selectedFile = file;
+    fileNameEl.textContent = '✓ ' + file.name;
+    uploadBtn.disabled = false;
+  }
+
+  dropzone.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', (e) => setFile(e.target.files[0]));
+
+  ['dragenter', 'dragover'].forEach(evt =>
+    dropzone.addEventListener(evt, (e) => {
+      e.preventDefault();
+      dropzone.classList.add('dragover');
+    })
+  );
+  ['dragleave', 'drop'].forEach(evt =>
+    dropzone.addEventListener(evt, (e) => {
+      e.preventDefault();
+      dropzone.classList.remove('dragover');
+    })
+  );
+  dropzone.addEventListener('drop', (e) => {
+    const file = e.dataTransfer.files[0];
+    setFile(file);
+  });
+
+  function showResult(ok, text) {
+    resultEl.className = ok ? 'ok' : 'err';
+    resultEl.textContent = text;
+  }
+
+  uploadBtn.addEventListener('click', async () => {
+    if (!selectedFile) return;
+    const serverUrl = serverUrlEl.value.replace(/\/$/, '');
+    const token = adminTokenEl.value.trim();
+
+    if (!serverUrl || !token) {
+      showResult(false, 'Server URL aur Admin Token dono bharo.');
+      return;
+    }
+
+    uploadBtn.disabled = true;
+    uploadBtn.textContent = 'Uploading...';
+    resultEl.style.display = 'none';
+
+    const formData = new FormData();
+    formData.append('file', selectedFile);
+
+    try {
+      const res = await fetch(`${serverUrl}/admin/orders/bulk-csv`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+        body: formData,
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        showResult(false, `Error: ${data.detail || JSON.stringify(data)}`);
+      } else {
+        let msg = `✓ ${data.success} orders saved successfully.`;
+        if (data.failed && data.failed.length > 0) {
+          msg += `\n\n✗ ${data.failed.length} rows failed:\n`;
+          data.failed.forEach(f => {
+            msg += `  Row ${f.row}: ${f.error}\n`;
+          });
+        }
+        showResult(true, msg);
+      }
+    } catch (err) {
+      showResult(false, `Network error: ${err.message}`);
+    } finally {
+      uploadBtn.disabled = false;
+      uploadBtn.textContent = 'Upload Orders';
+    }
+  });
+</script>
+</body>
+</html>

@@ -22,6 +22,7 @@ import io
 import logging
 
 from fastapi import FastAPI, Request, HTTPException, Header, UploadFile, File
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app import db
@@ -43,6 +44,20 @@ ORDER_ID_PATTERN = re.compile(r"\b([A-Z]{2,4}\d{3,8})\b", re.IGNORECASE)
 @app.get("/")
 async def root():
     return {"status": "ok", "service": "trade-bridge-whatsapp-bot"}
+
+
+@app.get("/admin/upload")
+async def upload_page():
+    """Drag-and-drop CSV upload UI — browser me kholo aur seedha CSV daalo."""
+    static_dir = os.path.join(os.path.dirname(__file__), "static")
+    return FileResponse(os.path.join(static_dir, "admin.html"))
+
+
+@app.get("/sample_orders.csv")
+async def sample_csv():
+    """Sample CSV template — upload page se download link ke liye."""
+    root_dir = os.path.dirname(os.path.dirname(__file__))
+    return FileResponse(os.path.join(root_dir, "sample_orders.csv"), filename="sample_orders.csv")
 
 
 # ─────────────────────────── incoming messages ───────────────────────────
