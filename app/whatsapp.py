@@ -1,57 +1,50 @@
 """
-Meta WhatsApp Cloud API wrapper — DIRECT integration, koi paid BSP (AiSensy/
-Gupshup/etc) nahi chahiye. Customer-initiated replies (service conversations)
-free hain (24-hour window ke andar, Meta ka 1000/month free tier).
+Evolution API wrapper — Baileys library pe based, self-hosted, unofficial
+WhatsApp connection (WhatsApp Web jaisa QR-scan se connect hota hai).
 
-Setup (ek baar karna hai):
-  1. https://developers.facebook.com pe Meta Developer account banao
-  2. Ek "App" banao -> Product add karo -> WhatsApp
-  3. Test number milega (ya apna business number verify karo)
-  4. WhatsApp -> API Setup page se milega:
-       - Temporary access token (24hr) -> Permanent token banane ke liye
-         System User banao (Meta Business Suite -> Business Settings)
-       - Phone Number ID
-  5. Ye dono .env me daalo: WHATSAPP_TOKEN aur WHATSAPP_PHONE_NUMBER_ID
+PURA FREE hai, koi Meta approval/BSP fee nahi lagta. Lekin ye WhatsApp ka
+official API nahi hai — reverse-engineered WhatsApp Web protocol use karta
+hai, isliye number ban hone ka risk hai. Kabhi apna primary number isme mat
+lagana — alag dedicated number use karo.
+
+Setup:
+  1. Evolution API ko Railway pe alag service ki tarah deploy karo
+     (Docker image: atendai/evolution-api) — README me poora process hai
+  2. Ek "instance" banao (= ek WhatsApp connection/session)
+  3. QR code scan karo apne dedicated WhatsApp number se
+  4. Evolution API URL + API key + instance name .env me daalo
 """
 
 import os
 import httpx
 
-WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN", "")
-WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
-GRAPH_API_VERSION = os.getenv("GRAPH_API_VERSION", "v21.0")
-
-GRAPH_URL = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{WHATSAPP_PHONE_NUMBER_ID}/messages"
+EVOLUTION_API_URL = os.getenv("EVOLUTION_API_URL", "").rstrip("/")
+EVOLUTION_API_KEY = os.getenv("EVOLUTION_API_KEY", "")
+EVOLUTION_INSTANCE = os.getenv("EVOLUTION_INSTANCE", "")
 
 
 async def send_whatsapp_message(phone: str, message: str):
     """
-    Customer ko WhatsApp pe seedha text message bhejo (Meta Cloud API).
-
-    NOTE: Ye sirf tab free/allowed hai jab customer ne pehle khud message
-    kiya ho aur 24 ghante ke andar reply ho raha ho ("service conversation").
-    Agar tumhe khud se (customer ke message ke bina) message shuru karna hai,
-    to Meta-approved template message chahiye hoga — wo doosra flow hai.
+    Customer ko WhatsApp text message bhejo, Evolution API (Baileys) ke through.
     """
-    if not WHATSAPP_TOKEN or not WHATSAPP_PHONE_NUMBER_ID:
+    if not EVOLUTION_API_URL or not EVOLUTION_API_KEY or not EVOLUTION_INSTANCE:
         raise RuntimeError(
-            "WHATSAPP_TOKEN ya WHATSAPP_PHONE_NUMBER_ID set nahi hai — .env check karo."
+            "EVOLUTION_API_URL / EVOLUTION_API_KEY / EVOLUTION_INSTANCE set nahi hai — .env check karo."
         )
 
     digits = "".join(ch for ch in phone if ch.isdigit())
 
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": digits,
-        "type": "text",
-        "text": {"body": message},
-    }
-    headers = {
-        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-        "Content-Type": "application/json",
-    }
+    url = f"{EVOLUTION_API_URL}/message/sendText/{EVOLUTION_INSTANCE}"
+    headers = {"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"}
+    payload = {"number": digits, "text": message}
 
     async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.post(GRAPH_URL, json=payload, headers=headers)
+        resp = await client.post(url, json=payload, headers=headers)
+        if resp.status_code >= 400:
+            # Evolution API ka payload shape version-wise thoda badal sakta hai
+            # (kuch versions "textMessage": {"text": ...} expect karte hain).
+            # Agar upar wala fail ho raha hai, retry with nested shape:
+            fallback_payload = {"number": digits, "textMessage": {"text": message}}
+            resp = await client.post(url, json=fallback_payload, headers=headers)
         resp.raise_for_status()
         return resp.json()

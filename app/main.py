@@ -1,16 +1,16 @@
 """
-Trade Bridge — WhatsApp Delivery Bot (Meta Cloud API — FREE, no BSP)
-=====================================================================
+Trade Bridge — WhatsApp Delivery Bot (Evolution API / Baileys — FREE, unofficial)
+===================================================================================
 Customer WhatsApp pe order ID bhejta hai -> bot MongoDB se status nikalta hai
--> Meta WhatsApp Cloud API se seedha WhatsApp pe reply karta hai.
+-> Evolution API (Baileys) se WhatsApp pe reply karta hai.
 
-Ye paid BSP (AiSensy/Gupshup) use nahi karta — seedha Meta ka official Cloud
-API hai. Customer-initiated replies (24hr window ke andar) free hain.
+NOTE: Ye WhatsApp ka unofficial/reverse-engineered protocol use karta hai
+(via Evolution API + Baileys). Pura free hai, koi 5-number test limit nahi,
+lekin number ban hone ka risk hai — dedicated number use karo, primary nahi.
 
 Endpoints:
   GET  /                    -> health check (Railway isse ping karega)
-  GET  /webhook              -> Meta webhook verification (setup ke time pe)
-  POST /webhook               -> incoming WhatsApp messages yahan aate hain
+  POST /webhook               -> Evolution API se incoming events yahan aate hain
   POST /admin/orders          -> naya order create/update (seller/admin)
   GET  /admin/orders/{id}    -> ek order ka status dekho
 """
@@ -19,8 +19,7 @@ import os
 import re
 import logging
 
-from fastapi import FastAPI, Request, HTTPException, Header, Query
-from fastapi.responses import PlainTextResponse
+from fastapi import FastAPI, Request, HTTPException, Header
 from pydantic import BaseModel
 
 from app import db
@@ -29,13 +28,11 @@ from app.whatsapp import send_whatsapp_message
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("trade-bridge")
 
-app = FastAPI(title="Trade Bridge - WhatsApp Delivery Bot")
+app = FastAPI(title="Trade Bridge - WhatsApp Delivery Bot (Evolution API)")
 
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
-VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "")  # Meta webhook verify ke liye, khud choose karo
 
 # Order ID pattern — apna format alag hai to yahan adjust kar lena.
-# Abhi: 2-4 letters + 3-8 digits, jaise "TB12345"
 ORDER_ID_PATTERN = re.compile(r"\b([A-Z]{2,4}\d{3,8})\b", re.IGNORECASE)
 
 
@@ -46,42 +43,38 @@ async def root():
     return {"status": "ok", "service": "trade-bridge-whatsapp-bot"}
 
 
-# ─────────────────────── webhook verification (Meta setup) ───────────────────────
-
-@app.get("/webhook")
-async def verify_webhook(
-    hub_mode: str = Query(alias="hub.mode", default=""),
-    hub_challenge: str = Query(alias="hub.challenge", default=""),
-    hub_verify_token: str = Query(alias="hub.verify_token", default=""),
-):
-    """
-    Meta jab webhook URL configure karte waqt ek GET request bhejta hai verify
-    karne ke liye. VERIFY_TOKEN wahi hona chahiye jo tum Meta dashboard me
-    daaloge webhook setup karte waqt.
-    """
-    if hub_mode == "subscribe" and hub_verify_token == VERIFY_TOKEN:
-        logger.info("Webhook verified successfully by Meta.")
-        return PlainTextResponse(hub_challenge)
-    raise HTTPException(403, "Verification failed — VERIFY_TOKEN match nahi hua.")
-
-
 # ─────────────────────────── incoming messages ───────────────────────────
 
 def extract_phone_and_text(payload: dict) -> tuple[str | None, str | None]:
     """
-    Meta ka webhook payload shape fixed hai (WhatsApp Cloud API docs):
-    entry[0].changes[0].value.messages[0]
+    Evolution API webhook shape (Baileys-based, event "messages.upsert"):
+      {
+        "event": "messages.upsert",
+        "instance": "...",
+        "data": {
+          "key": {"remoteJid": "919876543210@s.whatsapp.net", "fromMe": false, ...},
+          "message": {"conversation": "TB12345"}   # ya extendedTextMessage.text
+        }
+      }
     """
     try:
-        value = payload["entry"][0]["changes"][0]["value"]
-        messages = value.get("messages")
-        if not messages:
-            return None, None  # status update / read-receipt webhook, message nahi
-        msg = messages[0]
-        phone = msg.get("from")
-        text = msg.get("text", {}).get("body")
+        data = payload.get("data", {})
+        key = data.get("key", {})
+
+        if key.get("fromMe"):
+            return None, None  # apna hi bheja hua message, ignore karo (echo)
+
+        remote_jid = key.get("remoteJid", "")
+        phone = remote_jid.split("@")[0] if remote_jid else None
+
+        msg = data.get("message", {}) or {}
+        text = (
+            msg.get("conversation")
+            or msg.get("extendedTextMessage", {}).get("text")
+            or msg.get("buttonsResponseMessage", {}).get("selectedDisplayText")
+        )
         return phone, text
-    except (KeyError, IndexError, TypeError):
+    except (AttributeError, TypeError):
         logger.warning(f"Payload parse nahi ho paya, raw: {payload}")
         return None, None
 
@@ -89,13 +82,18 @@ def extract_phone_and_text(payload: dict) -> tuple[str | None, str | None]:
 @app.post("/webhook")
 async def webhook(request: Request):
     payload = await request.json()
+
+    # Sirf messages.upsert event process karo, baaki (connection updates,
+    # presence, etc.) ignore karo
+    event = payload.get("event", "")
+    if event and event != "messages.upsert":
+        return {"status": "ignored", "event": event}
+
     logger.info(f"Incoming webhook payload: {payload}")
 
     phone, text = extract_phone_and_text(payload)
 
     if not phone or not text:
-        # Ye normal hai — Meta status updates (delivered/read) bhi isi endpoint
-        # pe bhejta hai, unme "messages" nahi "statuses" hota hai. Ignore karo.
         return {"status": "ignored"}
 
     match = ORDER_ID_PATTERN.search(text)

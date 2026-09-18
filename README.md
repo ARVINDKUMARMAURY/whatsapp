@@ -1,52 +1,88 @@
-# Trade Bridge — WhatsApp Delivery Bot (100% Free — Meta Cloud API)
+# Trade Bridge — WhatsApp Delivery Bot (100% Free — Evolution API / Baileys)
 
 Customer WhatsApp pe apna order ID bhejta hai, bot MongoDB se status check karke
-**seedha Meta ke WhatsApp Cloud API** se reply kar deta hai — koi paid BSP
-(AiSensy/Gupshup/WATI) nahi, koi platform fee nahi.
+WhatsApp pe reply kar deta hai — **Evolution API** (open-source, Baileys library
+pe based) use karke. Koi Meta approval nahi, koi paid BSP nahi, koi per-message
+fee nahi — poora free aur unlimited.
 
-## Ye free kyun hai
+## ⚠️ Important — pehle ye samjho
 
-Meta WhatsApp Business API me har number ko **1000 free service conversations/month**
-milte hain. "Service conversation" matlab: customer khud message kare, tum 24 ghante
-ke andar reply karo. Yehi hamara use-case hai — customer order ID bhejta hai, bot
-turant reply karta hai. Isliye koi BSP markup ya subscription fee ki zaroorat nahi.
+Ye **unofficial** WhatsApp connection hai — Meta ka official Business API nahi.
+Evolution API, WhatsApp Web ke protocol ko reverse-engineer karke (Baileys library
+ke through) kaam karta hai, bilkul waise jaise tum browser me WhatsApp Web use
+karte ho.
 
-(Agar tumhe khud se, bina customer ke message kiye, WhatsApp bhejna ho — jaise
-"aapka order shipped ho gaya" proactive notification — us case me Meta-approved
-template message chahiye hota hai, jiska bhi bahut hi sasta per-message rate hai.
-Filhal is bot me sirf reply flow banaya hai jo poora free hai.)
+**Risks:**
+- WhatsApp inhe detect karke number **ban** kar sakta hai (kabhi bhi, koi warning
+  nahi milegi zaroori nahi)
+- **Apna personal/primary number kabhi mat use karna.** Ek alag dedicated
+  number rakho jise ban hone pe replace kar sako
+- Naye number pe automation turant shuru mat karo — pehle kuch din normal
+  WhatsApp jaisa use karo (thoda manual chat karo), phir gradually automate karo
+- High volume (jaise 100+ messages/day) pe ban ka chance badh jata hai
 
-## Kaise kaam karta hai
+Agar ye business-critical hai (real customers, real revenue), to safer option
+Meta ka official Cloud API hai (maine pehle wo bhi bana diya tha — free bhi hai
+is use-case ke liye, bas thoda setup zyada hai). Ye Evolution API route sirf
+tab lena jab risk acceptable ho.
+
+## Architecture
 
 ```
-Customer (WhatsApp) --order ID--> Meta Cloud API --webhook--> ye bot --> MongoDB lookup
-                                                                    |
-                                                                    v
-Customer (WhatsApp) <--status reply-- Meta Cloud API <--API call--+
+Customer (WhatsApp) --order ID--> Evolution API (Baileys) --webhook--> ye bot
+                                                                   |
+                                                                   v
+                                                          MongoDB lookup
+                                                                   |
+Customer (WhatsApp) <--status reply-- Evolution API <--REST call--+
 ```
+
+Do services chahiye:
+1. **Evolution API** — WhatsApp se connect karta hai (Docker image, Railway pe deploy)
+2. **Ye bot** (Trade Bridge) — order logic + MongoDB (isi repo ka code)
 
 ## Setup — Step by Step
 
-### 1. Meta Developer account + App banao
+### 1. Evolution API deploy karo (Railway pe alag service)
 
-1. https://developers.facebook.com pe jao, login/signup karo
-2. "My Apps" -> "Create App" -> type: **Business**
-3. App ke andar "Add Product" -> **WhatsApp** select karo
-4. WhatsApp -> **API Setup** page pe tumhe milega:
-   - Ek **test phone number** (free, turant use kar sakte ho testing ke liye)
-   - **Temporary access token** (24 ghante valid — permanent banana neeche step 2 me)
-   - **Phone Number ID** (copy kar lo, `.env` me daalna hai)
+1. Railway me naya project banao
+2. "Deploy from Docker Image" choose karo, image daalo: `atendai/evolution-api:latest`
+3. Environment variables set karo:
+   ```
+   AUTHENTICATION_API_KEY=koi_bhi_strong_random_string
+   DATABASE_ENABLED=false
+   ```
+   (production ke liye DB enable karna better hai session persist rehne ke liye,
+   lekin simple start ke liye DATABASE_ENABLED=false chalega)
+4. Deploy hone ke baad URL milega: `https://your-evolution-api.up.railway.app`
+5. Isi URL ko is bot ke `.env` me `EVOLUTION_API_URL` me daalna hai
 
-### 2. Permanent access token banao (temporary token 24hr me expire ho jata hai)
+### 2. WhatsApp instance banao aur QR scan karo
 
-1. Meta Business Suite -> Business Settings -> Users -> **System Users**
-2. Naya System User banao (Admin role)
-3. Us user ko apne WhatsApp app se assign karo
-4. "Generate Token" -> apna app select karo -> permissions me
-   `whatsapp_business_messaging` aur `whatsapp_business_management` check karo
-5. Ye permanent token `.env` me `WHATSAPP_TOKEN` me daalo
+```bash
+curl -X POST https://your-evolution-api.up.railway.app/instance/create \
+  -H "apikey: <AUTHENTICATION_API_KEY jo upar set kiya>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "instanceName": "tradebridge",
+    "qrcode": true,
+    "webhook": {
+      "url": "https://your-trade-bridge-bot.up.railway.app/webhook",
+      "events": ["MESSAGES_UPSERT"]
+    }
+  }'
+```
 
-### 3. Dependencies + environment
+Response me QR code (base64 image) milega — usse browser me open karke apne
+**dedicated WhatsApp number** se scan karo (WhatsApp -> Linked Devices -> Link a Device).
+
+Connection status check karne ke liye:
+```bash
+curl https://your-evolution-api.up.railway.app/instance/connectionState/tradebridge \
+  -H "apikey: <AUTHENTICATION_API_KEY>"
+```
+
+### 3. Is bot (Trade Bridge) ko deploy karo
 
 ```bash
 pip install -r requirements.txt
@@ -54,42 +90,23 @@ cp .env.example .env
 ```
 
 `.env` me bharo:
-- `MONGO_URI` — MongoDB Atlas free tier connection string
-- `WHATSAPP_TOKEN` — permanent token (step 2)
-- `WHATSAPP_PHONE_NUMBER_ID` — step 1 se
-- `VERIFY_TOKEN` — koi bhi random string khud bana lo (webhook verify ke liye)
-- `ADMIN_TOKEN` — koi bhi random strong string (admin API protect karne ke liye)
+- `MONGO_URI` — MongoDB Atlas free tier
+- `EVOLUTION_API_URL` — step 1 ka URL
+- `EVOLUTION_API_KEY` — step 1 me set kiya `AUTHENTICATION_API_KEY`
+- `EVOLUTION_INSTANCE` — `tradebridge` (ya jo naam diya step 2 me)
+- `ADMIN_TOKEN` — koi bhi random strong string
 
-### 4. Local run (test ke liye)
+Railway pe deploy karo (naya project, ye repo connect karo, saare env vars daalo).
 
-```bash
-uvicorn app.main:app --reload
-```
+### 4. Test karo
 
-### 5. Railway pe deploy
-
-1. Naya Railway project -> GitHub repo connect karo
-2. Saare `.env.example` wale variables Railway dashboard me daalo
-3. Deploy hone ke baad URL milega: `https://xxx.up.railway.app`
-
-### 6. Webhook Meta me configure karo
-
-1. Meta App Dashboard -> WhatsApp -> **Configuration**
-2. Callback URL: `https://xxx.up.railway.app/webhook`
-3. Verify Token: wahi jo `.env` me `VERIFY_TOKEN` daala tha
-4. "Verify and Save" click karo — agar sab sahi hai to turant verify ho jayega
-5. **Webhook fields** me `messages` subscribe karo (zaroor karna, warna incoming
-   messages nahi aayenge)
-
-### 7. Test karo
-
-Apne WhatsApp se test number pe koi order ID bhejo (jaise `TB12345`) — pehle
-neeche diya admin API se ek test order bana lo.
+Dedicated number pe koi aur WhatsApp se order ID bhejo (jaise `TB12345`) — pehle
+neeche diya admin API se test order bana lo.
 
 ## Order add/update karna (admin)
 
 ```bash
-curl -X POST https://xxx.up.railway.app/admin/orders \
+curl -X POST https://your-trade-bridge-bot.up.railway.app/admin/orders \
   -H "Authorization: Bearer YOUR_ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -101,20 +118,13 @@ curl -X POST https://xxx.up.railway.app/admin/orders \
   }'
 ```
 
-Status check:
+## Evolution API payload format note
 
-```bash
-curl https://xxx.up.railway.app/admin/orders/TB12345 \
-  -H "Authorization: Bearer YOUR_ADMIN_TOKEN"
-```
-
-## Important limits (free tier)
-
-- Test phone number sirf **5 pre-approved recipient numbers** ko message kar sakta
-  hai jab tak business verification complete nahi karte
-- Production me apna khud ka business number add karna hoga (verification lagta hai,
-  free hai, kuch din lag sakte hain Meta approval me)
-- 1000 free service conversations/month per phone number — is scale ke liye kaafi hai
+Evolution API ka `/message/sendText` payload shape version ke hisaab se thoda
+badalta rehta hai (`{"number","text"}` vs `{"number","textMessage":{"text"}}`).
+`app/whatsapp.py` dono try karta hai automatically. Agar phir bhi error aaye,
+apne deployed Evolution API ke `/docs` (Swagger) endpoint pe exact schema check
+kar lena.
 
 ## Order ID format badalna
 
@@ -127,6 +137,6 @@ curl https://xxx.up.railway.app/admin/orders/TB12345 \
 |---|---|
 | `app/main.py` | FastAPI app — webhook + admin endpoints |
 | `app/db.py` | MongoDB connection aur order queries |
-| `app/whatsapp.py` | Meta WhatsApp Cloud API se message bhejna |
-| `Procfile` | Railway deployment config |
+| `app/whatsapp.py` | Evolution API (Baileys) se message bhejna |
+| `Procfile` | Railway deployment config (is bot ke liye) |
 | `.env.example` | Environment variables template |
