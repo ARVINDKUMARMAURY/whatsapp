@@ -1,13 +1,17 @@
 """
-Trade Bridge — WhatsApp Delivery Bot
-=====================================
+Trade Bridge — WhatsApp Delivery Bot (Meta Cloud API — FREE, no BSP)
+=====================================================================
 Customer WhatsApp pe order ID bhejta hai -> bot MongoDB se status nikalta hai
--> AiSensy API se WhatsApp pe reply karta hai.
+-> Meta WhatsApp Cloud API se seedha WhatsApp pe reply karta hai.
+
+Ye paid BSP (AiSensy/Gupshup) use nahi karta — seedha Meta ka official Cloud
+API hai. Customer-initiated replies (24hr window ke andar) free hain.
 
 Endpoints:
-  GET  /                    -> health check (Railway/Render isse ping karte hain)
-  POST /webhook              -> AiSensy incoming-message webhook yahan aayega
-  POST /admin/orders         -> naya order create/update karo (seller/admin use karega)
+  GET  /                    -> health check (Railway isse ping karega)
+  GET  /webhook              -> Meta webhook verification (setup ke time pe)
+  POST /webhook               -> incoming WhatsApp messages yahan aate hain
+  POST /admin/orders          -> naya order create/update (seller/admin)
   GET  /admin/orders/{id}    -> ek order ka status dekho
 """
 
@@ -15,21 +19,23 @@ import os
 import re
 import logging
 
-from fastapi import FastAPI, Request, HTTPException, Header
+from fastapi import FastAPI, Request, HTTPException, Header, Query
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 from app import db
-from app.aisensy import send_whatsapp_message
+from app.whatsapp import send_whatsapp_message
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("trade-bridge")
 
 app = FastAPI(title="Trade Bridge - WhatsApp Delivery Bot")
 
-ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")  # order update requests isse protect hote hain
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
+VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "")  # Meta webhook verify ke liye, khud choose karo
 
-# Order ID pattern — jaisa bhi format tum use karte ho usse yahan adjust kar lena.
-# Abhi: 2-4 letters + 3-8 digits, jaise "TB12345" ya "AB1234567"
+# Order ID pattern — apna format alag hai to yahan adjust kar lena.
+# Abhi: 2-4 letters + 3-8 digits, jaise "TB12345"
 ORDER_ID_PATTERN = re.compile(r"\b([A-Z]{2,4}\d{3,8})\b", re.IGNORECASE)
 
 
@@ -40,43 +46,44 @@ async def root():
     return {"status": "ok", "service": "trade-bridge-whatsapp-bot"}
 
 
-# ─────────────────────────── incoming webhook ───────────────────────────
+# ─────────────────────── webhook verification (Meta setup) ───────────────────────
+
+@app.get("/webhook")
+async def verify_webhook(
+    hub_mode: str = Query(alias="hub.mode", default=""),
+    hub_challenge: str = Query(alias="hub.challenge", default=""),
+    hub_verify_token: str = Query(alias="hub.verify_token", default=""),
+):
+    """
+    Meta jab webhook URL configure karte waqt ek GET request bhejta hai verify
+    karne ke liye. VERIFY_TOKEN wahi hona chahiye jo tum Meta dashboard me
+    daaloge webhook setup karte waqt.
+    """
+    if hub_mode == "subscribe" and hub_verify_token == VERIFY_TOKEN:
+        logger.info("Webhook verified successfully by Meta.")
+        return PlainTextResponse(hub_challenge)
+    raise HTTPException(403, "Verification failed — VERIFY_TOKEN match nahi hua.")
+
+
+# ─────────────────────────── incoming messages ───────────────────────────
 
 def extract_phone_and_text(payload: dict) -> tuple[str | None, str | None]:
     """
-    AiSensy webhook payload se phone number aur message text nikalo.
-
-    NOTE: AiSensy ka exact webhook payload shape tumhare account/setup pe depend
-    kar sakta hai. Ye function common field names try karta hai. Agar match nahi
-    ho raha, /webhook pe raw payload log ho raha hai (Railway logs me dekho) —
-    us shape ke hisaab se neeche keys adjust kar dena.
+    Meta ka webhook payload shape fixed hai (WhatsApp Cloud API docs):
+    entry[0].changes[0].value.messages[0]
     """
-    # Common shapes to try
-    phone = (
-        payload.get("mobile")
-        or payload.get("waId")
-        or payload.get("from")
-        or payload.get("sender")
-        or payload.get("contact", {}).get("phone")
-        or (payload.get("data") or {}).get("mobile")
-    )
-    text = (
-        payload.get("text")
-        or payload.get("message")
-        or payload.get("body")
-        or (payload.get("data") or {}).get("text")
-    )
-
-    # AiSensy kabhi-kabhi nested "messages" array bhejta hai (WhatsApp Cloud API jaisa)
-    if not text and "messages" in payload:
-        try:
-            msg = payload["messages"][0]
-            phone = phone or msg.get("from")
-            text = msg.get("text", {}).get("body")
-        except (KeyError, IndexError, TypeError):
-            pass
-
-    return phone, text
+    try:
+        value = payload["entry"][0]["changes"][0]["value"]
+        messages = value.get("messages")
+        if not messages:
+            return None, None  # status update / read-receipt webhook, message nahi
+        msg = messages[0]
+        phone = msg.get("from")
+        text = msg.get("text", {}).get("body")
+        return phone, text
+    except (KeyError, IndexError, TypeError):
+        logger.warning(f"Payload parse nahi ho paya, raw: {payload}")
+        return None, None
 
 
 @app.post("/webhook")
@@ -87,16 +94,15 @@ async def webhook(request: Request):
     phone, text = extract_phone_and_text(payload)
 
     if not phone or not text:
-        logger.warning("Phone ya text extract nahi ho paya — payload shape check karo logs me.")
-        return {"status": "ignored", "reason": "could not parse phone/text"}
+        # Ye normal hai — Meta status updates (delivered/read) bhi isi endpoint
+        # pe bhejta hai, unme "messages" nahi "statuses" hota hai. Ignore karo.
+        return {"status": "ignored"}
 
     match = ORDER_ID_PATTERN.search(text)
 
     if not match:
         await send_whatsapp_message(
-            phone,
-            message="Please apna order ID bhejo (jaise TB12345) taaki main status bata sakoon.",
-            template_params=["Please apna order ID bhejo (jaise TB12345) taaki main status bata sakoon."],
+            phone, "Please apna order ID bhejo (jaise TB12345) taaki main status bata sakoon."
         )
         return {"status": "ok", "reply": "asked_for_order_id"}
 
@@ -113,7 +119,7 @@ async def webhook(request: Request):
         if note:
             reply_text += f" Note: {note}"
 
-    await send_whatsapp_message(phone, message=reply_text, template_params=[reply_text])
+    await send_whatsapp_message(phone, reply_text)
     return {"status": "ok", "reply": reply_text}
 
 
