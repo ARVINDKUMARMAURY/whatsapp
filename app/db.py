@@ -56,3 +56,46 @@ async def update_status(order_id: str, status: str, note: str = ""):
         {"$set": {"status": status, "note": note, "updated_at": datetime.now(timezone.utc)}},
     )
     return result.modified_count > 0
+
+
+async def bulk_upsert_orders(orders: list[dict]):
+    """
+    Ek saath bahut saare orders create/update karo. Har dict me kam se kam
+    order_id, phone, product, status honi chahiye (note optional).
+
+    Return: {"success": count, "failed": [{"row": i, "error": "..."}]}
+    """
+    now = datetime.now(timezone.utc)
+    success = 0
+    failed = []
+
+    for i, o in enumerate(orders):
+        try:
+            order_id = str(o["order_id"]).strip().upper()
+            phone = str(o["phone"]).strip()
+            product = str(o.get("product", "")).strip()
+            status = str(o.get("status", "Placed")).strip()
+            note = str(o.get("note", "")).strip()
+
+            if not order_id or not phone:
+                raise ValueError("order_id aur phone dono zaroori hain")
+
+            await orders_col.update_one(
+                {"order_id": order_id},
+                {
+                    "$set": {
+                        "phone": phone,
+                        "product": product,
+                        "status": status,
+                        "note": note,
+                        "updated_at": now,
+                    },
+                    "$setOnInsert": {"created_at": now},
+                },
+                upsert=True,
+            )
+            success += 1
+        except (KeyError, ValueError) as e:
+            failed.append({"row": i, "error": str(e), "data": o})
+
+    return {"success": success, "failed": failed}

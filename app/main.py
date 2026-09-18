@@ -17,9 +17,11 @@ Endpoints:
 
 import os
 import re
+import csv
+import io
 import logging
 
-from fastapi import FastAPI, Request, HTTPException, Header
+from fastapi import FastAPI, Request, HTTPException, Header, UploadFile, File
 from pydantic import BaseModel
 
 from app import db
@@ -153,3 +155,46 @@ async def read_order(order_id: str, authorization: str | None = Header(default=N
         raise HTTPException(404, "Order nahi mila")
     order["_id"] = str(order["_id"])
     return order
+
+
+class BulkOrdersIn(BaseModel):
+    orders: list[OrderIn]
+
+
+@app.post("/admin/orders/bulk")
+async def bulk_create_orders(payload: BulkOrdersIn, authorization: str | None = Header(default=None)):
+    """
+    Ek saath bahut saare orders daalo — JSON array se.
+    Example body: {"orders": [{"order_id": "TB1", "phone": "91...", "product": "...", "status": "Placed"}, ...]}
+    """
+    check_admin(authorization)
+    orders_data = [o.model_dump() for o in payload.orders]
+    result = await db.bulk_upsert_orders(orders_data)
+    return result
+
+
+@app.post("/admin/orders/bulk-csv")
+async def bulk_create_orders_csv(
+    file: UploadFile = File(...), authorization: str | None = Header(default=None)
+):
+    """
+    CSV file upload karke ek saath saare orders daalo.
+    CSV columns: order_id,phone,product,status,note (note optional)
+
+    Example CSV:
+        order_id,phone,product,status,note
+        TB12345,919876543210,Wireless Mouse,Placed,
+        TB12346,919876543211,Keyboard,Shipped,Expected in 2 days
+    """
+    check_admin(authorization)
+
+    raw = await file.read()
+    text = raw.decode("utf-8-sig")  # utf-8-sig Excel ke BOM ko bhi handle kar leta hai
+    reader = csv.DictReader(io.StringIO(text))
+
+    orders_data = [row for row in reader]
+    if not orders_data:
+        raise HTTPException(400, "CSV khali hai ya format sahi nahi hai")
+
+    result = await db.bulk_upsert_orders(orders_data)
+    return result

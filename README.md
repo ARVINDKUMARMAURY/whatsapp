@@ -118,6 +118,42 @@ curl -X POST https://your-trade-bridge-bot.up.railway.app/admin/orders \
   }'
 ```
 
+## Saare orders ek saath daalna (Bulk Import)
+
+Ek-ek order curl se daalna practical nahi hai — isliye do bulk options hain:
+
+### Option A: CSV file se (Excel/Google Sheets se export karke)
+
+`sample_orders.csv` jaisi file banao (columns: `order_id,phone,product,status,note`
+— `note` optional hai). Excel/Google Sheets me table banao, "Export as CSV" karo,
+phir:
+
+```bash
+curl -X POST https://your-trade-bridge-bot.up.railway.app/admin/orders/bulk-csv \
+  -H "Authorization: Bearer YOUR_ADMIN_TOKEN" \
+  -F "file=@orders.csv"
+```
+
+Response me batayega kitne successfully add hue aur kitne fail hue (aur kyun).
+
+### Option B: JSON array se (agar data kahin script/API se aa raha ho)
+
+```bash
+curl -X POST https://your-trade-bridge-bot.up.railway.app/admin/orders/bulk \
+  -H "Authorization: Bearer YOUR_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "orders": [
+      {"order_id": "TB12345", "phone": "919876543210", "product": "Wireless Mouse", "status": "Placed"},
+      {"order_id": "TB12346", "phone": "919876543211", "product": "Keyboard", "status": "Shipped", "note": "Expected in 2 days"}
+    ]
+  }'
+```
+
+Dono endpoints **upsert** karte hain — matlab agar `order_id` already exist karta
+hai to update ho jayega, naya hai to create ho jayega. Same file/list dobara bhej
+sakte ho status update karne ke liye (jaise sab "Shipped" se "Delivered" karna ho).
+
 ## Evolution API payload format note
 
 Evolution API ka `/message/sendText` payload shape version ke hisaab se thoda
